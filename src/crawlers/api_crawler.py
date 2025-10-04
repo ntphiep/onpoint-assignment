@@ -1,113 +1,158 @@
 """
-API data crawler for fetching data from public APIs.
+API crawler for fetching data from public APIs.
 """
+import asyncio
 import json
-import requests
+import logging
 import time
 from datetime import datetime
-from typing import Dict, List, Any
-import os
-import sys
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-# Add src to path for imports
-sys.path.append(os.path.dirname(os.path.dirname(__file__)))
-from utils.config import Config
+import aiohttp
+import requests
+
+try:
+    from ..utils.config import config, ensure_directory
+except ImportError:
+    # Fallback for when running as a script
+    import sys
+    from pathlib import Path
+    sys.path.append(str(Path(__file__).parent.parent.parent))
+    from src.utils.config import config, ensure_directory
+
+logger = logging.getLogger(__name__)
+
 
 class APICrawler:
-    """Crawler for fetching data from public APIs."""
+    """Crawler for public APIs."""
     
-    def __init__(self):
-        self.base_url = Config.API_BASE_URL
-        self.session = requests.Session()
-        self.session.headers.update({
-            'User-Agent': 'Mini-Pipeline-Crawler/1.0',
-            'Accept': 'application/json'
-        })
+    def __init__(self, output_dir: str = None):
+        """Initialize API crawler."""
+        self.output_dir = output_dir or str(Path(__file__).parent.parent.parent / "data" / "raw")
+        ensure_directory(self.output_dir)
+        self.session: Optional[aiohttp.ClientSession] = None
         
-    def fetch_posts(self) -> List[Dict[str, Any]]:
-        """Fetch posts from JSONPlaceholder API."""
+    async def __aenter__(self):
+        """Async context manager entry."""
+        self.session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=config.get('processing.timeout', 30))
+        )
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """Async context manager exit."""
+        if self.session:
+            await self.session.close()
+    
+    async def fetch_url(self, url: str) -> Dict[str, Any]:
+        """Fetch data from a single URL."""
         try:
-            response = self.session.get(f"{self.base_url}/posts", timeout=Config.TIMEOUT)
-            response.raise_for_status()
-            return response.json()
-        except requests.RequestException as e:
-            print(f"Error fetching posts: {e}")
-            return []
+            async with self.session.get(url) as response:
+                response.raise_for_status()
+                data = await response.json()
+                logger.info(f"Successfully fetched data from {url}")
+                return {
+                    'url': url,
+                    'status_code': response.status,
+                    'data': data,
+                    'timestamp': datetime.now().isoformat(),
+                    'size': len(str(data))
+                }
+        except Exception as e:
+            logger.error(f"Error fetching {url}: {e}")
+            return {
+                'url': url,
+                'error': str(e),
+                'timestamp': datetime.now().isoformat()
+            }
     
-    def fetch_users(self) -> List[Dict[str, Any]]:
-        """Fetch users from JSONPlaceholder API."""
-        try:
-            response = self.session.get(f"{self.base_url}/users", timeout=Config.TIMEOUT)
-            response.raise_for_status()
-            return response.json()
-        except requests.RequestException as e:
-            print(f"Error fetching users: {e}")
-            return []
+    async def crawl_jsonplaceholder(self) -> None:
+        """Crawl JSONPlaceholder API endpoints."""
+        logger.info("Starting JSONPlaceholder API crawling...")
+        
+        api_config = config.get('data_sources.api.jsonplaceholder')
+        base_url = api_config['base_url']
+        endpoints = api_config['endpoints']
+        
+        # Create tasks for concurrent fetching
+        tasks = []
+        for endpoint_name, endpoint_path in endpoints.items():
+            url = f"{base_url}{endpoint_path}"
+            tasks.append(self.fetch_url(url))
+        
+        # Execute all requests concurrently
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        
+        # Save results
+        for i, result in enumerate(results):
+            endpoint_name = list(endpoints.keys())[i]
+            
+            if isinstance(result, Exception):
+                logger.error(f"Exception for {endpoint_name}: {result}")
+                continue
+            
+            # Save raw JSON data
+            output_file = Path(self.output_dir) / f"jsonplaceholder_{endpoint_name}.json"
+            with open(output_file, 'w', encoding='utf-8') as f:
+                json.dump(result, f, indent=2, ensure_ascii=False)
+            
+            logger.info(f"Saved {endpoint_name} data to {output_file}")
     
-    def fetch_comments(self) -> List[Dict[str, Any]]:
-        """Fetch comments from JSONPlaceholder API."""
-        try:
-            response = self.session.get(f"{self.base_url}/comments", timeout=Config.TIMEOUT)
-            response.raise_for_status()
-            return response.json()
-        except requests.RequestException as e:
-            print(f"Error fetching comments: {e}")
-            return []
+    def crawl_jsonplaceholder_sync(self) -> None:
+        """Synchronous version of JSONPlaceholder crawling."""
+        logger.info("Starting JSONPlaceholder API crawling (sync)...")
+        
+        api_config = config.get('data_sources.api.jsonplaceholder')
+        base_url = api_config['base_url']
+        endpoints = api_config['endpoints']
+        
+        for endpoint_name, endpoint_path in endpoints.items():
+            try:
+                url = f"{base_url}{endpoint_path}"
+                response = requests.get(url, timeout=30)
+                response.raise_for_status()
+                
+                result = {
+                    'url': url,
+                    'status_code': response.status_code,
+                    'data': response.json(),
+                    'timestamp': datetime.now().isoformat(),
+                    'size': len(response.content)
+                }
+                
+                # Save raw JSON data
+                output_file = Path(self.output_dir) / f"jsonplaceholder_{endpoint_name}.json"
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    json.dump(result, f, indent=2, ensure_ascii=False)
+                
+                logger.info(f"Saved {endpoint_name} data to {output_file}")
+                time.sleep(0.5)  # Be respectful to the API
+                
+            except Exception as e:
+                logger.error(f"Error crawling {endpoint_name}: {e}")
     
-    def save_to_json(self, data: List[Dict[str, Any]], filename: str) -> str:
-        """Save data to JSON file."""
-        Config.ensure_directories()
-        filepath = os.path.join(Config.RAW_DATA_DIR, filename)
-        
-        # Add metadata
-        output_data = {
-            "metadata": {
-                "source": "api",
-                "timestamp": datetime.now().isoformat(),
-                "count": len(data),
-                "source_url": self.base_url
-            },
-            "data": data
-        }
-        
-        with open(filepath, 'w', encoding='utf-8') as f:
-            json.dump(output_data, f, indent=2, ensure_ascii=False)
-        
-        print(f"Saved {len(data)} records to {filepath}")
-        return filepath
+    async def run_async(self) -> None:
+        """Run async crawling."""
+        await self.crawl_jsonplaceholder()
     
-    def crawl_all(self) -> Dict[str, str]:
-        """Crawl all data sources and save to JSON files."""
-        results = {}
-        
-        print("Starting API crawling...")
-        
-        # Fetch posts
-        posts = self.fetch_posts()
-        if posts:
-            results['posts'] = self.save_to_json(posts, 'api_posts.json')
-        
-        # Fetch users
-        users = self.fetch_users()
-        if users:
-            results['users'] = self.save_to_json(users, 'api_users.json')
-        
-        # Fetch comments
-        comments = self.fetch_comments()
-        if comments:
-            results['comments'] = self.save_to_json(comments, 'api_comments.json')
-        
-        print(f"API crawling completed. Files saved: {list(results.keys())}")
-        return results
+    def run(self) -> None:
+        """Run synchronous crawling."""
+        self.crawl_jsonplaceholder_sync()
 
-def main():
-    """Main function to run the API crawler."""
-    crawler = APICrawler()
-    results = crawler.crawl_all()
-    
-    print("\nAPI Crawler Results:")
-    for data_type, filepath in results.items():
-        print(f"- {data_type}: {filepath}")
+
+async def main():
+    """Main function for testing."""
+    async with APICrawler() as crawler:
+        await crawler.run_async()
+
 
 if __name__ == "__main__":
-    main()
+    import sys
+    sys.path.append(str(Path(__file__).parent.parent.parent))
+    from src.utils.config import setup_logging
+    setup_logging()
+    
+    # Run synchronous version for simplicity
+    crawler = APICrawler()
+    crawler.run()

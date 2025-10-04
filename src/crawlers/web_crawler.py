@@ -2,7 +2,7 @@ import json
 import logging
 import re
 import time
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -37,15 +37,92 @@ class WebCrawler:
             'Connection': 'keep-alive',
         })
     
-    def extract_text_safe(self, element) -> str:
-        if element:
-            return element.get_text(strip=True)
-        return ""
-    
-    def extract_href_safe(self, element) -> str:
-        if element:
-            return element.get('href', '')
-        return ""
+    def extract_text_safe(self, element: Any, default: str = "") -> str:
+        try:
+            return element.get_text(strip=True) if element else default
+        except Exception:
+            return default
+
+    def extract_href_safe(self, element: Any, default: str = "") -> str:
+        try:
+            return element.get('href', default) if element else default
+        except Exception:
+            return default
+
+    def crawl_posts_by_date(self, target_date: str, max_posts: int = 100) -> List[Dict[str, Any]]:
+        target_date_obj = datetime.strptime(target_date, "%Y-%m-%d").date()
+        posts = []
+        after = None
+        attempts = 0
+        max_attempts = 10
+        
+        logging.info(f"Crawling {max_posts} posts from {target_date}")
+        
+        while len(posts) < max_posts and attempts < max_attempts:
+            attempts += 1
+            batch_posts = self._fetch_reddit_posts(after=after, limit=min(100, max_posts - len(posts)))
+            
+            if not batch_posts:
+                logging.warning(f"No more posts found after {attempts} attempts")
+                break
+                
+            valid_posts = []
+            for post in batch_posts:
+                post_date = self._extract_post_date(post)
+                if post_date == target_date_obj:
+                    valid_posts.append(post)
+                elif post_date < target_date_obj:
+                    logging.info(f"Reached posts older than target date {target_date}")
+                    attempts = max_attempts
+                    break
+                    
+            posts.extend(valid_posts)
+            after = batch_posts[-1].get('data', {}).get('name') if batch_posts else None
+            
+            logging.info(f"Found {len(valid_posts)} posts from {target_date} (total: {len(posts)}/{max_posts})")
+            time.sleep(1)
+            
+        return posts[:max_posts]
+
+    def _fetch_reddit_posts(self, after: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+        params = {'limit': limit}
+        if after:
+            params['after'] = after
+            
+        url = self.config['reddit']['json_url']
+        
+        try:
+            response = self.session.get(url, params=params, timeout=30)
+            response.raise_for_status()
+            
+            data = response.json()
+            return data.get('data', {}).get('children', [])
+            
+        except requests.exceptions.RequestException as e:
+            logging.error(f"Error fetching Reddit posts: {e}")
+            return []
+        except json.JSONDecodeError as e:
+            logging.error(f"Error parsing Reddit JSON: {e}")
+            return []
+
+    def _extract_post_date(self, post: Dict[str, Any]) -> date:
+        created_utc = post.get('data', {}).get('created_utc', 0)
+        return datetime.fromtimestamp(created_utc).date()
+
+    def crawl_date_range(self, start_date: str, end_date: str, max_posts_per_day: int = 50) -> Dict[str, List[Dict[str, Any]]]:
+        start_date_obj = datetime.strptime(start_date, "%Y-%m-%d").date()
+        end_date_obj = datetime.strptime(end_date, "%Y-%m-%d").date()
+        
+        all_posts = {}
+        current_date = start_date_obj
+        
+        while current_date <= end_date_obj:
+            date_str = current_date.strftime("%Y-%m-%d")
+            posts = self.crawl_posts_by_date(date_str, max_posts_per_day)
+            all_posts[date_str] = posts
+            current_date += timedelta(days=1)
+            
+        return all_posts
     
 
     
