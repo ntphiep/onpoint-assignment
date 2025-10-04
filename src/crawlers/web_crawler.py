@@ -1,170 +1,244 @@
-# DummyJSON Web Crawler# DummyJSON Web Crawler
+import json
+import logging
+import re
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
 
-import jsonimport json
+import requests
+from bs4 import BeautifulSoup
 
-import requestsimport requests
+try:
+    from ..utils.config import config, ensure_directory
+except ImportError:
+    # Fallback for when running as a script
+    import sys
+    from pathlib import Path
+    sys.path.append(str(Path(__file__).parent.parent.parent))
+    from src.utils.config import config, ensure_directory
 
-from datetime import datetimefrom datetime import datetime
-
-from typing import Dict, List, Anyfrom typing import Dict, List, Any
-
-import timeimport time
+logger = logging.getLogger(__name__)
 
 
-
-class WebCrawler:class WebCrawler:
-
-    def __init__(self):    def __init__(self):
-
-        self.session = requests.Session()        self.session = requests.Session()
-
-        self.session.headers.update({        self.session.headers.update({
-
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-
-        })        })
-
-        self.base_url = 'https://dummyjson.com/products'        self.base_url = "https://dummyjson.com/products"
-
+class WebCrawler:
+    
+    def __init__(self, output_dir: str = None):
+        self.output_dir = output_dir or str(Path(__file__).parent.parent.parent / "data" / "raw")
+        ensure_directory(self.output_dir)
         
+        # Setup session with headers to appear more like a regular browser
+        self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate',
+            'Connection': 'keep-alive',
+        })
+    
+    def extract_text_safe(self, element) -> str:
+        if element:
+            return element.get_text(strip=True)
+        return ""
+    
+    def extract_href_safe(self, element) -> str:
+        if element:
+            return element.get('href', '')
+        return ""
+    
 
-    def scrape_ecommerce_products(self, max_products: int = 100):    def scrape_ecommerce_products(self, max_products: int = 100):
-
-        products = []        products = []
-
-        products_per_page = 30        products_per_page = 30
-
-        pages_needed = min((max_products + products_per_page - 1) // products_per_page, 7)        pages_needed = min((max_products + products_per_page - 1) // products_per_page, 7)
-
+    
+    def crawl_reddit_python(self) -> None:
+        logger.info("Starting Reddit Python subreddit crawling...")
+        
+        # Try multiple Reddit endpoints
+        endpoints = [
+            "https://www.reddit.com/r/python.json",
+            "https://old.reddit.com/r/python.json",
+            "https://www.reddit.com/r/python/.json"
+        ]
+        
+        for url in endpoints:
+            try:
+                logger.info(f"Trying endpoint: {url}")
                 
-
-        print(f'Scraping up to {max_products} products from DummyJSON API...')        print(f"Scraping up to {max_products} products from DummyJSON API...")
-
+                # Enhanced headers to avoid blocking
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+                    'Accept': 'application/json, text/plain, */*',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'DNT': '1',
+                    'Connection': 'keep-alive',
+                    'Upgrade-Insecure-Requests': '1',
+                    'Sec-Fetch-Dest': 'document',
+                    'Sec-Fetch-Mode': 'navigate',
+                    'Sec-Fetch-Site': 'none',
+                    'Cache-Control': 'max-age=0'
+                }
                 
-
-        for page in range(pages_needed):        for page in range(pages_needed):
-
-            skip = page * products_per_page            skip = page * products_per_page
-
-            limit = min(products_per_page, max_products - len(products))            limit = min(products_per_page, max_products - len(products))
-
-                        
-
-            if limit <= 0:            if limit <= 0:
-
-                break                break
-
-                        
-
-            url = f'{self.base_url}?limit={limit}&skip={skip}'            url = f"{self.base_url}?limit={limit}&skip={skip}"
-
-            print(f'Fetching page {page + 1}: {url}')            print(f"Fetching page {page + 1}: {url}")
-
-                        
-
-            try:            try:
-
-                response = self.session.get(url, timeout=30)                response = self.session.get(url, timeout=30)
-
-                response.raise_for_status()                response.raise_for_status()
-
-                data = response.json()                data = response.json()
-
-                page_products = data.get('products', [])                page_products = data.get("products", [])
-
-                                
-
-                for product in page_products:                for product in page_products:
-
-                    product_data = {                    product_data = {
-
-                        'id': f'dj_{product.get("id", "unknown")}_{int(datetime.now().timestamp())}',                        "id": f"dj_{product.get(\"id\", \"unknown\")}_{int(datetime.now().timestamp())}",
-
-                        'title': product.get('title', 'Unknown Product'),                        "title": product.get("title", "Unknown Product"),
-
-                        'price': f'${product.get("price", 0):.2f}',                        "price": f"${product.get(\"price\", 0):.2f}",
-
-                        'description': product.get('description', 'No description available'),                        "description": product.get("description", "No description available"),
-
-                        'rating': round(product.get('rating', 0), 2),                        "rating": round(product.get("rating", 0), 2),
-
-                        'reviews_count': len(product.get('reviews', [])),                        "reviews_count": len(product.get("reviews", [])),
-
-                        'product_url': f'https://dummyjson.com/products/{product.get("id", "")}',                        "product_url": f"https://dummyjson.com/products/{product.get(\"id\", \"\")}",
-
-                        'image_url': product.get('thumbnail', ''),                        "image_url": product.get("thumbnail", ""),
-
-                        'category': product.get('category', 'Uncategorized').title(),                        "category": product.get("category", "Uncategorized").title(),
-
-                        'brand': product.get('brand', 'Unknown Brand'),                        "brand": product.get("brand", "Unknown Brand"),
-
-                        'stock': product.get('stock', 0),                        "stock": product.get("stock", 0),
-
-                        'discount_percentage': product.get('discountPercentage', 0),                        "discount_percentage": product.get("discountPercentage", 0),
-
-                        'sku': product.get('sku', ''),                        "sku": product.get("sku", ""),
-
-                        'weight': product.get('weight', 0),                        "weight": product.get("weight", 0),
-
-                        'availability_status': product.get('availabilityStatus', 'Unknown'),                        "availability_status": product.get("availabilityStatus", "Unknown"),
-
-                        'warranty_info': product.get('warrantyInformation', 'No warranty'),                        "warranty_info": product.get("warrantyInformation", "No warranty"),
-
-                        'shipping_info': product.get('shippingInformation', 'No shipping info'),                        "shipping_info": product.get("shippingInformation", "No shipping info"),
-
-                        'return_policy': product.get('returnPolicy', 'No return policy'),                        "return_policy": product.get("returnPolicy", "No return policy"),
-
-                        'tags': ', '.join(product.get('tags', [])),                        "tags": ", ".join(product.get("tags", [])),
-
-                        'marketplace': 'DummyJSON E-commerce',                        "marketplace": "DummyJSON E-commerce",
-
-                        'scraped_at': datetime.now().isoformat(),                        "scraped_at": datetime.now().isoformat(),
-
-                        'source': 'dummyjson_ecommerce_api',                        "source": "dummyjson_ecommerce_api",
-
-                        'meta_created_at': product.get('meta', {}).get('createdAt', ''),                        "meta_created_at": product.get("meta", {}).get("createdAt", ""),
-
-                        'meta_updated_at': product.get('meta', {}).get('updatedAt', '')                        "meta_updated_at": product.get("meta", {}).get("updatedAt", "")
-
-                    }                    }
-
-                    products.append(product_data)                    products.append(product_data)
-
-                                
-
-                if page < pages_needed - 1:                if page < pages_needed - 1:
-
-                    time.sleep(0.5)                    time.sleep(0.5)
-
-                                        
-
-            except Exception as e:            except Exception as e:
-
-                print(f'Error fetching page {page + 1}: {e}')                print(f"Error fetching page {page + 1}: {e}")
-
-                                
-
-        print(f'Successfully scraped {len(products)} products from DummyJSON')        print(f"Successfully scraped {len(products)} products from DummyJSON")
-
-        return products        return products
-
-
-
-if __name__ == '__main__':if __name__ == "__main__":
-
-    crawler = WebCrawler()    crawler = WebCrawler()
-
-    products = crawler.scrape_ecommerce_products(max_products=50)    products = crawler.scrape_ecommerce_products(max_products=50)
-
-    if products:    if products:
-
-        print(f'\nSuccessfully scraped {len(products)} products!')        print(f"\nSuccessfully scraped {len(products)} products!")
-
-        print('\nSample product:')        print("\nSample product:")
-
-        sample = products[0]        sample = products[0]
-
-        for key, value in sample.items():        for key, value in sample.items():
-
-            print(f'  {key}: {value}')            print(f"  {key}: {value}")
-
+                response = requests.get(url, headers=headers, timeout=30)
+                logger.info(f"Response status: {response.status_code}")
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    posts = self.process_reddit_data(data, url)
+                    if posts:
+                        logger.info(f"Successfully scraped {len(posts)} Reddit posts")
+                        return
+                else:
+                    logger.warning(f"Failed to access {url}: Status {response.status_code}")
+                    
+            except Exception as e:
+                logger.warning(f"Error with endpoint {url}: {e}")
+                continue
+        
+        # If all endpoints fail, try web scraping fallback
+        logger.info("All JSON endpoints failed, trying web scraping...")
+        self.crawl_reddit_web_fallback()
+    
+    def process_reddit_data(self, data, url):
+        posts = []
+        
+        if 'data' in data and 'children' in data['data']:
+            for post_data in data['data']['children']:
+                post = post_data.get('data', {})
+                
+                post_info = {
+                    'id': post.get('id', ''),
+                    'title': post.get('title', ''),
+                    'author': post.get('author', ''),
+                    'score': post.get('score', 0),
+                    'num_comments': post.get('num_comments', 0),
+                    'created_utc': post.get('created_utc', 0),
+                    'url': post.get('url', ''),
+                    'selftext': post.get('selftext', ''),
+                    'subreddit': post.get('subreddit', ''),
+                    'upvote_ratio': post.get('upvote_ratio', 0),
+                    'is_self': post.get('is_self', False),
+                    'scraped_at': datetime.now().isoformat()
+                }
+                
+                posts.append(post_info)
+        
+        if posts:
+            result = {
+                'source': 'reddit_python',
+                'url': url,
+                'scraped_at': datetime.now().isoformat(),
+                'total_posts': len(posts),
+                'data': posts
+            }
+            
+            # Save raw JSON data
+            output_file = Path(self.output_dir) / "reddit_python_posts.json"
+            with open(output_file, 'w', encoding='utf-8') as f:
+                json.dump(result, f, indent=2, ensure_ascii=False)
+            
+            logger.info(f"Saved {len(posts)} Reddit posts to {output_file}")
+            return posts
+        
+        return None
+    
+    def crawl_reddit_web_fallback(self):
+        try:
+            url = "https://old.reddit.com/r/python"
+            logger.info(f"Attempting web scraping fallback for: {url}")
+            
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
+            
+            response = requests.get(url, headers=headers, timeout=30)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            posts = []
+            post_elements = soup.find_all('div', class_='thing')[:10]  # Get first 10 posts
+            
+            for i, post_element in enumerate(post_elements):
+                try:
+                    title_element = post_element.find('a', class_='title')
+                    title = self.extract_text_safe(title_element) if title_element else ""
+                    
+                    author_element = post_element.find('a', class_='author')
+                    author = self.extract_text_safe(author_element) if author_element else ""
+                    
+                    score_element = post_element.find('div', class_='score')
+                    score = self.extract_text_safe(score_element) if score_element else "0"
+                    
+                    comments_element = post_element.find('a', class_='comments')
+                    comments_text = self.extract_text_safe(comments_element) if comments_element else "0"
+                    
+                    post_data = {
+                        'id': post_element.get('data-fullname', f'web_{i}'),
+                        'title': title,
+                        'author': author,
+                        'score': score,
+                        'comments': comments_text,
+                        'scraped_at': datetime.now().isoformat(),
+                        'source_method': 'web_scraping'
+                    }
+                    
+                    posts.append(post_data)
+                    
+                except Exception as e:
+                    logger.warning(f"Error processing post {i}: {e}")
+                    continue
+            
+            if posts:
+                result = {
+                    'source': 'reddit_python_web',
+                    'url': url,
+                    'scraped_at': datetime.now().isoformat(),
+                    'total_posts': len(posts),
+                    'method': 'web_scraping_fallback',
+                    'data': posts
+                }
+                
+                output_file = Path(self.output_dir) / "reddit_python_posts.json"
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    json.dump(result, f, indent=2, ensure_ascii=False)
+                
+                logger.info(f"Saved {len(posts)} Reddit posts via web scraping to {output_file}")
+            else:
+                logger.warning("No posts extracted via web scraping")
+                
+        except Exception as e:
+            logger.error(f"Web scraping fallback failed: {e}")
+            # Create minimal error file
+            error_result = {
+                'source': 'reddit_python',
+                'error': str(e),
+                'scraped_at': datetime.now().isoformat(),
+                'data': []
+            }
+            
+            output_file = Path(self.output_dir) / "reddit_python_posts.json"
+            with open(output_file, 'w', encoding='utf-8') as f:
+                json.dump(error_result, f, indent=2, ensure_ascii=False)
+    
+    
+    
+    def run(self) -> None:
+        self.crawl_reddit_python()
+    
+    def __del__(self):
+        if hasattr(self, 'session'):
+            self.session.close()
+
+
+def main():
+    crawler = WebCrawler()
+    crawler.run()
+
+
+if __name__ == "__main__":
+    import sys
+    sys.path.append(str(Path(__file__).parent.parent.parent))
+    from src.utils.config import setup_logging
+    setup_logging()
+    
+    main()
