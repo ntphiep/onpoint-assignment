@@ -22,7 +22,6 @@ logger = logging.getLogger(__name__)
 
 
 class WebCrawler:
-    
     def __init__(self, output_dir: str = None):
         self.output_dir = output_dir or str(Path(__file__).parent.parent.parent / "data" / "raw")
         ensure_directory(self.output_dir)
@@ -296,7 +295,6 @@ class WebCrawler:
             output_file = Path(self.output_dir) / "reddit_python_posts.json"
             with open(output_file, 'w', encoding='utf-8') as f:
                 json.dump(error_result, f, indent=2, ensure_ascii=False)
-    
     
     
     def run(self) -> None:
