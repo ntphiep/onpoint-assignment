@@ -10,7 +10,7 @@ import click
 from src.crawlers.api_crawler import APICrawler
 from src.crawlers.web_crawler import WebCrawler
 from src.etl.pipeline import ETLPipeline
-from src.processors.file_converter import FileConverter
+from src.processors.processor import FileConverter
 from src.storage.s3_uploader import S3Uploader
 from src.utils.config import config, setup_logging
 

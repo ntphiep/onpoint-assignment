@@ -71,7 +71,6 @@ class FileConverter:
                 with open(path, "r", encoding="utf-8") as f:
                     data = json.load(f)
 
-                # If the file is a dict with a 'data' list, use only that list (user request)
                 if isinstance(data, dict) and "data" in data and isinstance(data["data"], list):
                     records = data["data"]
                 elif isinstance(data, list):
@@ -112,13 +111,9 @@ class FileConverter:
                 df = pd.json_normalize(df.to_dict(orient="records"))
         except Exception: pass
 
-
         name = path.stem
-
-        # If pandas produced columns like 'data.id', 'data.title', etc., extract them
         data_prefixed = [c for c in df.columns if c.startswith("data.")]
         if data_prefixed:
-            # select only those columns and strip the 'data.' prefix
             df = df[data_prefixed].rename(columns={c: c.split("data.", 1)[1] for c in data_prefixed})
 
         # Remove common outer metadata columns if present

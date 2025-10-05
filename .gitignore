@@ -134,6 +134,7 @@ dmypy.json
 # Data directories
 data/raw/*.json
 data/processed/*.csv
+data/processed/*.parquet
 data/outputs/
 data/s3_simulation/
 data/*.txt

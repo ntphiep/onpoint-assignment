@@ -1,453 +1,156 @@
-"""
-ETL Pipeline for extracting, transforming, and loading data.
-"""
+import json
 import logging
-from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
-
+from datetime import datetime
 import pandas as pd
-from sqlalchemy import text
-
-from ..processors.data_processor import DataProcessor
-from ..utils.config import config
 
 logger = logging.getLogger(__name__)
 
 
 class ETLPipeline:
-    """Complete ETL pipeline for data processing and SQL generation."""
-    
-    def __init__(self, sql_output_dir: str = None):
-        """Initialize ETL pipeline."""
-        self.sql_output_dir = sql_output_dir or str(Path(__file__).parent.parent.parent / "sql")
-        Path(self.sql_output_dir).mkdir(parents=True, exist_ok=True)
-        
-        self.db_config = config.get_database_config()
-        self.processor = DataProcessor()
-    
-    def extract(self) -> Dict[str, pd.DataFrame]:
-        """Extract data from raw JSON files and process."""
-        logger.info("Starting data extraction and processing...")
-        return self.processor.process_all_data()
-    
-    def transform(self, datasets: Dict[str, pd.DataFrame]) -> Dict[str, pd.DataFrame]:
-        """Transform data for database insertion."""
-        logger.info("Starting data transformation...")
-        
-        transformed_datasets = {}
-        
-        for name, df in datasets.items():
-            logger.info(f"Transforming {name} dataset...")
-            
-            # Make a copy to avoid modifying original
-            transformed_df = df.copy()
-            
-            # Common transformations
-            transformed_df = self._apply_common_transformations(transformed_df, name)
-            
-            # Dataset-specific transformations
-            if name == 'posts':
-                transformed_df = self._transform_posts(transformed_df)
-            elif name == 'users':
-                transformed_df = self._transform_users(transformed_df)
-            elif name == 'comments':
-                transformed_df = self._transform_comments(transformed_df)
-            elif name == 'hackernews_stories':
-                transformed_df = self._transform_hackernews_stories(transformed_df)
-            elif name == 'reddit_posts':
-                transformed_df = self._transform_reddit_posts(transformed_df)
-            
-            transformed_datasets[name] = transformed_df
-            logger.info(f"Transformed {name}: {transformed_df.shape}")
-        
-        return transformed_datasets
-    
-    def _apply_common_transformations(self, df: pd.DataFrame, dataset_name: str) -> pd.DataFrame:
-        """Apply common transformations to all datasets."""
-        # Add ETL metadata
-        df['etl_processed_at'] = datetime.now().isoformat()
-        df['etl_dataset_name'] = dataset_name
-        
-        # Handle null values
-        df = df.fillna('')
-        
-        # Clean string columns
-        string_columns = df.select_dtypes(include=['object']).columns
-        for col in string_columns:
-            if col in df.columns:
-                df[col] = df[col].astype(str).str.strip()
-                # Replace empty strings with None for proper SQL handling
-                df[col] = df[col].replace('', None)
-        
-        return df
-    
-    def _transform_posts(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Transform posts dataset for database."""
-        # Ensure proper data types
-        df['id'] = pd.to_numeric(df['id'], errors='coerce').astype('Int64')
-        df['userId'] = pd.to_numeric(df['userId'], errors='coerce').astype('Int64')
-        df['title_length'] = pd.to_numeric(df['title_length'], errors='coerce').astype('Int64')
-        df['body_length'] = pd.to_numeric(df['body_length'], errors='coerce').astype('Int64')
-        df['word_count'] = pd.to_numeric(df['word_count'], errors='coerce').astype('Int64')
-        
-        # Validate required fields
-        df = df.dropna(subset=['id'])
-        
-        return df
-    
-    def _transform_users(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Transform users dataset for database."""
-        # Ensure proper data types
-        df['id'] = pd.to_numeric(df['id'], errors='coerce').astype('Int64')
-        df['has_website'] = df['has_website'].astype(bool)
-        
-        # Validate email format (basic)
-        email_pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$'
-        df['email_valid'] = df['email'].str.match(email_pattern, na=False)
-        
-        # Clean phone numbers
-        if 'phone' in df.columns:
-            df['phone_cleaned'] = df['phone'].str.replace(r'[^0-9x.-]', '', regex=True)
-        
-        # Validate required fields
-        df = df.dropna(subset=['id'])
-        
-        return df
-    
-    def _transform_comments(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Transform comments dataset for database."""
-        # Ensure proper data types
-        df['id'] = pd.to_numeric(df['id'], errors='coerce').astype('Int64')
-        df['postId'] = pd.to_numeric(df['postId'], errors='coerce').astype('Int64')
-        df['body_length'] = pd.to_numeric(df['body_length'], errors='coerce').astype('Int64')
-        df['word_count'] = pd.to_numeric(df['word_count'], errors='coerce').astype('Int64')
-        
-        # Validate required fields
-        df = df.dropna(subset=['id', 'postId'])
-        
-        return df
-    
-    def _transform_hackernews_stories(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Transform Hacker News stories for database."""
-        # Ensure proper data types
-        df['rank'] = pd.to_numeric(df['rank'], errors='coerce').astype('Int64')
-        df['score_numeric'] = pd.to_numeric(df['score_numeric'], errors='coerce')
-        df['comments_numeric'] = pd.to_numeric(df['comments_numeric'], errors='coerce').astype('Int64')
-        df['title_length'] = pd.to_numeric(df['title_length'], errors='coerce').astype('Int64')
-        df['has_external_url'] = df['has_external_url'].astype(bool)
-        
-        # Clean URLs
-        df['url'] = df['url'].str.strip()
-        df.loc[df['url'].str.startswith('item?id='), 'url'] = 'https://news.ycombinator.com/' + df['url']
-        
-        return df
-    
-    def _transform_reddit_posts(self, df: pd.DataFrame) -> pd.DataFrame:
-        """Transform Reddit posts for database."""
-        # Ensure proper data types
-        df['score'] = pd.to_numeric(df['score'], errors='coerce').astype('Int64')
-        df['num_comments'] = pd.to_numeric(df['num_comments'], errors='coerce').astype('Int64')
-        df['title_length'] = pd.to_numeric(df['title_length'], errors='coerce').astype('Int64')
-        df['selftext_length'] = pd.to_numeric(df['selftext_length'], errors='coerce').astype('Int64')
-        df['has_selftext'] = df['has_selftext'].astype(bool)
-        
-        # Handle datetime
-        if 'created_datetime' in df.columns:
-            df['created_datetime'] = pd.to_datetime(df['created_datetime'], errors='coerce')
-        
-        return df
-    
-    def generate_table_ddl(self, df: pd.DataFrame, table_name: str) -> str:
-        """Generate PostgreSQL table DDL from DataFrame."""
-        ddl_lines = [f"CREATE TABLE IF NOT EXISTS {table_name} ("]
-        
-        # Map pandas dtypes to PostgreSQL types
-        type_mapping = {
-            'object': 'TEXT',
-            'int64': 'BIGINT',
-            'Int64': 'BIGINT',
-            'float64': 'DECIMAL(10,2)',
-            'bool': 'BOOLEAN',
-            'datetime64[ns]': 'TIMESTAMP',
-            'datetime64[ns, UTC]': 'TIMESTAMP WITH TIME ZONE'
-        }
-        
-        column_definitions = []
-        for col, dtype in df.dtypes.items():
-            pg_type = type_mapping.get(str(dtype), 'TEXT')
-            
-            # Special cases
-            if col.endswith('_id') or col == 'id':
-                if 'id' in col.lower():
-                    pg_type = 'BIGINT'
-            elif 'email' in col.lower():
-                pg_type = 'VARCHAR(255)'
-            elif 'url' in col.lower():
-                pg_type = 'TEXT'
-            elif 'length' in col.lower() or 'count' in col.lower():
-                pg_type = 'INTEGER'
-            
-            column_definitions.append(f"    {col} {pg_type}")
-        
-        ddl_lines.extend(column_definitions)
-        ddl_lines.append(");")
-        
-        return "\\n".join(ddl_lines)
-    
-    def generate_insert_sql(self, df: pd.DataFrame, table_name: str) -> str:
-        """Generate INSERT statements for DataFrame."""
-        if df.empty:
-            return f"-- No data to insert for table {table_name}\\n"
-        
-        sql_lines = [f"-- INSERT statements for {table_name}"]
-        sql_lines.append(f"-- Total records: {len(df)}")
-        sql_lines.append("")
-        
-        # Generate INSERT statements in batches
-        batch_size = config.get('processing.batch_size', 1000)
-        
-        for i in range(0, len(df), batch_size):
-            batch_df = df.iloc[i:i + batch_size]
-            
-            sql_lines.append(f"-- Batch {i // batch_size + 1}")
-            
-            # Generate multi-row INSERT
-            columns = list(batch_df.columns)
-            column_list = ", ".join(columns)
-            
-            values_list = []
-            for _, row in batch_df.iterrows():
-                row_values = []
-                for col in columns:
-                    value = row[col]
-                    if pd.isna(value) or value is None:
-                        row_values.append("NULL")
-                    elif isinstance(value, str):
-                        # Escape single quotes
-                        escaped_value = value.replace("'", "''")
-                        row_values.append(f"'{escaped_value}'")
-                    elif isinstance(value, bool):
-                        row_values.append("TRUE" if value else "FALSE")
-                    else:
-                        row_values.append(str(value))
-                
-                values_list.append(f"    ({', '.join(row_values)})")
-            
-            insert_sql = f"""INSERT INTO {table_name} ({column_list})
-VALUES
-{',\\n'.join(values_list)};"""
-            
-            sql_lines.append(insert_sql)
-            sql_lines.append("")
-        
-        return "\\n".join(sql_lines)
-    
-    def generate_upsert_sql(self, df: pd.DataFrame, table_name: str, conflict_column: str = 'id') -> str:
-        """Generate UPSERT (INSERT ... ON CONFLICT) statements."""
-        if df.empty:
-            return f"-- No data to upsert for table {table_name}\\n"
-        
-        sql_lines = [f"-- UPSERT statements for {table_name}"]
-        sql_lines.append(f"-- Conflict resolution on: {conflict_column}")
-        sql_lines.append(f"-- Total records: {len(df)}")
-        sql_lines.append("")
-        
-        columns = list(df.columns)
-        column_list = ", ".join(columns)
-        
-        # Generate update clause for conflict resolution
-        update_columns = [col for col in columns if col != conflict_column]
-        update_clause = ", ".join([f"{col} = EXCLUDED.{col}" for col in update_columns])
-        
-        # Generate in smaller batches for upsert
-        batch_size = 500
-        
-        for i in range(0, len(df), batch_size):
-            batch_df = df.iloc[i:i + batch_size]
-            
-            sql_lines.append(f"-- Upsert batch {i // batch_size + 1}")
-            
-            values_list = []
-            for _, row in batch_df.iterrows():
-                row_values = []
-                for col in columns:
-                    value = row[col]
-                    if pd.isna(value) or value is None:
-                        row_values.append("NULL")
-                    elif isinstance(value, str):
-                        escaped_value = value.replace("'", "''")
-                        row_values.append(f"'{escaped_value}'")
-                    elif isinstance(value, bool):
-                        row_values.append("TRUE" if value else "FALSE")
-                    else:
-                        row_values.append(str(value))
-                
-                values_list.append(f"    ({', '.join(row_values)})")
-            
-            upsert_sql = f"""INSERT INTO {table_name} ({column_list})
-VALUES
-{',\\n'.join(values_list)}
-ON CONFLICT ({conflict_column}) DO UPDATE SET
-    {update_clause};"""
-            
-            sql_lines.append(upsert_sql)
-            sql_lines.append("")
-        
-        return "\\n".join(sql_lines)
-    
-    def load(self, datasets: Dict[str, pd.DataFrame]) -> None:
-        """Load (generate SQL scripts) for transformed data."""
-        logger.info("Starting SQL generation (Load phase)...")
-        
-        sql_dir = Path(self.sql_output_dir)
-        
-        # Generate master SQL file
-        master_sql_lines = [
-            "-- OnPoint Technical Assessment - ETL Pipeline SQL Scripts",
-            f"-- Generated on: {datetime.now().isoformat()}",
-            "-- Database: PostgreSQL",
-            "",
-            "-- Set session parameters",
-            "SET client_encoding = 'UTF8';",
-            "SET timezone = 'UTC';",
-            "",
-        ]
-        
-        for name, df in datasets.items():
-            logger.info(f"Generating SQL for {name}...")
-            
-            table_name = f"onpoint_{name}"
-            
-            # Generate DDL
-            ddl_sql = self.generate_table_ddl(df, table_name)
-            
-            # Generate INSERT statements
-            insert_sql = self.generate_insert_sql(df, table_name)
-            
-            # Generate UPSERT statements (if applicable)
-            upsert_sql = ""
-            if 'id' in df.columns:
-                upsert_sql = self.generate_upsert_sql(df, table_name, 'id')
-            
-            # Save individual SQL files
-            # DDL file
-            ddl_file = sql_dir / f"{name}_ddl.sql"
-            with open(ddl_file, 'w', encoding='utf-8') as f:
-                f.write(ddl_sql)
-            
-            # INSERT file
-            insert_file = sql_dir / f"{name}_insert.sql"
-            with open(insert_file, 'w', encoding='utf-8') as f:
-                f.write(insert_sql)
-            
-            # UPSERT file (if applicable)
-            if upsert_sql:
-                upsert_file = sql_dir / f"{name}_upsert.sql"
-                with open(upsert_file, 'w', encoding='utf-8') as f:
-                    f.write(upsert_sql)
-            
-            logger.info(f"Generated SQL files for {name}")
-            
-            # Add to master file
-            master_sql_lines.extend([
-                f"-- {name.upper()} TABLE",
-                "-- " + "=" * 50,
-                ddl_sql,
-                "",
-                insert_sql,
-                "",
-            ])
-        
-        # Save master SQL file
-        master_file = sql_dir / "complete_etl_pipeline.sql"
-        with open(master_file, 'w', encoding='utf-8') as f:
-            f.write("\\n".join(master_sql_lines))
-        
-        logger.info(f"Generated master SQL file: {master_file}")
-        
-        # Create execution script
-        self.create_execution_script(list(datasets.keys()))
-    
-    def create_execution_script(self, dataset_names: List[str]) -> None:
-        """Create a script to execute all SQL files in order."""
-        script_content = [
-            "#!/bin/bash",
-            "# OnPoint ETL Pipeline - SQL Execution Script",
-            "",
-            "# Database connection parameters",
-            f"DB_HOST={self.db_config.get('postgresql', {}).get('host', 'localhost')}",
-            f"DB_PORT={self.db_config.get('postgresql', {}).get('port', 5432)}",
-            f"DB_NAME={self.db_config.get('postgresql', {}).get('database', 'onpoint_assessment')}",
-            f"DB_USER={self.db_config.get('postgresql', {}).get('username', 'postgres')}",
-            "",
-            "echo 'Starting ETL Pipeline SQL execution...'",
-            "",
-            "# Execute DDL statements first",
-            "echo 'Creating tables...'",
-        ]
-        
-        for name in dataset_names:
-            script_content.append(f"psql -h $DB_HOST -p $DB_PORT -d $DB_NAME -U $DB_USER -f {name}_ddl.sql")
-        
-        script_content.extend([
-            "",
-            "# Execute INSERT statements",
-            "echo 'Inserting data...'",
-        ])
-        
-        for name in dataset_names:
-            script_content.append(f"psql -h $DB_HOST -p $DB_PORT -d $DB_NAME -U $DB_USER -f {name}_insert.sql")
-        
-        script_content.extend([
-            "",
-            "echo 'ETL Pipeline execution completed!'",
-        ])
-        
-        script_file = Path(self.sql_output_dir) / "execute_etl.sh"
-        with open(script_file, 'w', encoding='utf-8') as f:
-            f.write("\\n".join(script_content))
-        
-        # Make script executable
-        script_file.chmod(0o755)
-        
-        logger.info(f"Created execution script: {script_file}")
-    
-    def run_pipeline(self) -> Dict[str, pd.DataFrame]:
-        """Run the complete ETL pipeline."""
-        logger.info("Starting ETL Pipeline...")
-        
-        # Extract
-        raw_datasets = self.extract()
-        
-        if not raw_datasets:
-            logger.warning("No data extracted, pipeline cannot continue")
-            return {}
-        
-        # Transform
-        transformed_datasets = self.transform(raw_datasets)
-        
-        # Load (generate SQL)
-        self.load(transformed_datasets)
-        
-        logger.info("ETL Pipeline completed successfully")
-        return transformed_datasets
+	def __init__(self, raw_dir: str | Path = None, sql_out: str | Path = None):
+		base = Path(__file__).resolve().parents[2]
+		self.raw_dir = Path(raw_dir) if raw_dir else base / "data" / "raw"
+		self.sql_out = Path(sql_out) if sql_out else base / "src" / "etl" / "generated_upserts.sql"
 
+	def _load_json_records(self, path: Path):
+		with open(path, "r", encoding="utf-8") as f:
+			data = json.load(f)
 
-def main():
-    """Main function for testing."""
-    pipeline = ETLPipeline()
-    datasets = pipeline.run_pipeline()
-    
-    print("\\nETL Pipeline Results:")
-    for name, df in datasets.items():
-        print(f"  {name}: {df.shape}")
+		# prefer top-level 'data' list
+		if isinstance(data, dict) and "data" in data and isinstance(data["data"], list):
+			records = data["data"]
+		elif isinstance(data, list):
+			records = data
+		else:
+			# attempt to find first list value
+			records = None
+			if isinstance(data, dict):
+				for v in data.values():
+					if isinstance(v, list):
+						records = v
+						break
+			if records is None:
+				# fallback: wrap the dict
+				records = [data]
+
+		df = pd.json_normalize(records)
+		return df
+
+	def _sanitize_sql_literal(self, val):
+		if pd.isna(val):
+			return "NULL"
+		if isinstance(val, (int, float)) and not isinstance(val, bool):
+			return str(val)
+		if isinstance(val, bool):
+			return 'TRUE' if val else 'FALSE'
+		s = str(val)
+		# collapse newlines and escape single quotes
+		s = s.replace('\r\n', ' ').replace('\n', ' ').replace('\r', ' ')
+		s = s.replace("'", "''")
+		return f"'{s}'"
+
+	def _process_json_placeholder(self, df: pd.DataFrame) -> pd.DataFrame:
+		# Flatten address into single column
+		try:
+			def make_address(row):
+				parts = []
+				for col in ("address.street", "address.suite", "address.city", "address.zipcode"):
+					v = row.get(col)
+					if pd.notna(v) and v not in (None, ""):
+						parts.append(str(v))
+				return ", ".join(parts)
+
+			df["address"] = df.apply(lambda r: make_address(r.to_dict()), axis=1)
+		except Exception:
+			logger.exception("address flatten failed")
+
+		# Flatten company
+		df["company_name"] = df.get("company.name")
+		df["company_catchPhrase"] = df.get("company.catchPhrase")
+		df["company_bs"] = df.get("company.bs")
+
+		# Select desired columns and rename if needed
+		cols = [c for c in ("id", "name", "username", "email", "phone", "website", "address", "company_name", "company_catchPhrase", "company_bs") if c in df.columns]
+		return df[cols]
+
+	def _process_reddit(self, df: pd.DataFrame) -> pd.DataFrame:
+		# convert created_utc seconds -> UTC timestamp string
+		if "created_utc" in df.columns:
+			try:
+				df["created_utc"] = pd.to_datetime(df["created_utc"], unit="s", utc=True).dt.strftime("%Y-%m-%d %H:%M:%S")
+			except Exception:
+				logger.exception("failed to convert created_utc")
+
+		cols = [c for c in ("id", "title", "author", "score", "num_comments", "created_utc", "selftext", "subreddit", "upvote_ratio", "is_self") if c in df.columns]
+		return df[cols]
+
+	def _write_sql_file(self, users_df: pd.DataFrame | None, reddit_df: pd.DataFrame | None):
+		lines = []
+		# Header: create tables
+		lines.append("-- Generated upsert SQL\n")
+
+		lines.append("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, name TEXT, username TEXT, email TEXT, phone TEXT, website TEXT, address TEXT, company_name TEXT, company_catchphrase TEXT, company_bs TEXT, updated_at TIMESTAMPTZ DEFAULT now());\n")
+
+		lines.append("CREATE TABLE IF NOT EXISTS reddit_posts (id TEXT PRIMARY KEY, title TEXT, author TEXT, score INTEGER, num_comments INTEGER, created_utc TIMESTAMPTZ, selftext TEXT, subreddit TEXT, upvote_ratio NUMERIC, is_self BOOLEAN, updated_at TIMESTAMPTZ DEFAULT now());\n")
+
+		if users_df is not None and not users_df.empty:
+			lines.append("-- Upserts for users\n")
+			for _, row in users_df.iterrows():
+				id_lit = self._sanitize_sql_literal(row.get("id"))
+				vals = [self._sanitize_sql_literal(row.get(c)) for c in ["name", "username", "email", "phone", "website", "address", "company_name", "company_catchPhrase", "company_bs"]]
+				cols = ["name", "username", "email", "phone", "website", "address", "company_name", "company_catchPhrase", "company_bs"]
+				cols_sql = ", ".join(cols)
+				vals_sql = ", ".join(vals)
+				update_sql = ", ".join([f"{c}=EXCLUDED.{c}" for c in cols])
+				stmt = f"INSERT INTO users (id, {cols_sql}, updated_at) VALUES ({id_lit}, {vals_sql}, now()) ON CONFLICT (id) DO UPDATE SET {update_sql}, updated_at = now();"
+				lines.append(stmt)
+
+		if reddit_df is not None and not reddit_df.empty:
+			lines.append("-- Upserts for reddit_posts\n")
+			for _, row in reddit_df.iterrows():
+				id_lit = self._sanitize_sql_literal(row.get("id"))
+				vals = [self._sanitize_sql_literal(row.get(c)) for c in ["title", "author", "score", "num_comments", "created_utc", "selftext", "subreddit", "upvote_ratio", "is_self"]]
+				cols = ["title", "author", "score", "num_comments", "created_utc", "selftext", "subreddit", "upvote_ratio", "is_self"]
+				cols_sql = ", ".join(cols)
+				vals_sql = ", ".join(vals)
+				update_sql = ", ".join([f"{c}=EXCLUDED.{c}" for c in cols])
+				stmt = f"INSERT INTO reddit_posts (id, {cols_sql}, updated_at) VALUES ({id_lit}, {vals_sql}, now()) ON CONFLICT (id) DO UPDATE SET {update_sql}, updated_at = now();"
+				lines.append(stmt)
+
+		# Write file
+		self.sql_out.parent.mkdir(parents=True, exist_ok=True)
+		with open(self.sql_out, "w", encoding="utf-8") as f:
+			f.write("\n".join(lines))
+
+		logger.info("Wrote SQL upsert file to %s", self.sql_out)
+
+	def run_pipeline(self):
+		users_df = None
+		reddit_df = None
+
+		raw_files = list(self.raw_dir.glob("*.json"))
+		for p in raw_files:
+			name = p.stem
+			try:
+				df = self._load_json_records(p)
+			except Exception:
+				logger.exception("failed to load %s", p)
+				continue
+
+			# dataset-specific
+			if "jsonplaceholder" in name or "json_placeholder" in name or "users" in name:
+				users_df = self._process_json_placeholder(df)
+			elif "reddit" in name:
+				reddit_df = self._process_reddit(df)
+
+		# Write SQL file with upserts
+		self._write_sql_file(users_df, reddit_df)
+		return {"users": users_df, "reddit": reddit_df}
 
 
 if __name__ == "__main__":
-    import sys
-    sys.path.append(str(Path(__file__).parent.parent.parent))
-    from src.utils.config import setup_logging
-    setup_logging()
-    
-    main()
+	logging.basicConfig(level=logging.INFO)
+	p = ETLPipeline()
+	p.run_pipeline()
+
