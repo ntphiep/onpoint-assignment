@@ -1,0 +1,59 @@
+{
+  "data_sources": {
+    "api": {
+      "jsonplaceholder": {
+        "base_url": "https://jsonplaceholder.typicode.com",
+        "endpoints": {
+          "posts": "/posts",
+          "users": "/users",
+          "comments": "/comments"
+        }
+      }
+    },
+    "web": {
+      "hackernews": {
+        "url": "https://news.ycombinator.com",
+        "selectors": {
+          "stories": ".athing",
+          "title": ".titleline > a",
+          "score": ".score",
+          "author": ".hnuser",
+          "time": ".age"
+        }
+      }
+    }
+  },
+  "aws": {
+    "region": "us-east-1",
+    "s3_bucket": "your-bucket-name",
+    "access_key": "YOUR_ACCESS_KEY",
+    "secret_key": "YOUR_SECRET_KEY"
+  },
+  "database": {
+    "postgresql": {
+      "host": "localhost",
+      "port": 5432,
+      "database": "onpoint_assessment",
+      "username": "postgres",
+      "password": "password"
+    }
+  },
+  "processing": {
+    "batch_size": 1000,
+    "max_workers": 4,
+    "timeout": 30
+  },
+  "file_formats": {
+    "csv": {
+      "encoding": "utf-8",
+      "separator": ","
+    },
+    "parquet": {
+      "compression": "snappy",
+      "engine": "pyarrow"
+    },
+    "excel": {
+      "engine": "openpyxl"
+    }
+  }
+}
