@@ -11,23 +11,23 @@
       }
     },
     "web": {
-      "hackernews": {
-        "url": "https://news.ycombinator.com",
+      "reddit": {
+        "url": "https://www.reddit.com/r/python.json",
         "selectors": {
-          "stories": ".athing",
-          "title": ".titleline > a",
+          "posts": ".thing",
+          "title": ".title a",
           "score": ".score",
-          "author": ".hnuser",
-          "time": ".age"
+          "author": ".author",
+          "comments": ".comments"
         }
       }
     }
   },
   "aws": {
     "region": "us-east-1",
-    "s3_bucket": "your-bucket-name",
-    "access_key": "YOUR_ACCESS_KEY",
-    "secret_key": "YOUR_SECRET_KEY"
+    "s3_bucket": "onpoint-assessment-bucket",
+    "access_key": "DEMO_ACCESS_KEY",
+    "secret_key": "DEMO_SECRET_KEY"
   },
   "database": {
     "postgresql": {
